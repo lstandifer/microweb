@@ -5,7 +5,12 @@ import uos
 import ubinascii
 import json
 import time
-import ntptime
+from machine import Pin
+from time import sleep
+from picozero import pico_temp_sensor, pico_led
+
+led = Pin(9, Pin.OUT)
+
 
 config = {
     "default_ap_name" : "PicoW",
@@ -26,8 +31,6 @@ config = {
 
 ssid = ""
 password = ""
-
-
 
 ##########################################################################
 ### generate random string
@@ -121,13 +124,10 @@ def updateJsonFileField(key, value, fileName):
     jsonFile.write(json.dumps(data))
     jsonFile.close()
     
-
 ##########################################################################
 ### Setup Access Point for user connection
 
-def setupAccessPoint(data):
-    ssid = getSsid(data)
-    password = getPassword(data)
+def setupAccessPoint(ssid, password):
 
     ap = network.WLAN(network.AP_IF)
 
@@ -137,17 +137,20 @@ def setupAccessPoint(data):
     while ap.active == False:
         pass
 
+    print("")
     print("Access point active")
-    print("Wifi SSID: " + ssid)
-    print("Wifi Password: " + password)
-    print(ap.ifconfig())
+    print("")
+    print("Wifi SSID:       " + ssid)
+    print("Wifi Password:   " + password)
+    print("Ap Ip Address:   " + ap.ifconfig()[0])
+    print("Subnet:          " + ap.ifconfig()[1])
+    print("Gateway:         " + ap.ifconfig()[2])
+    print("DNS:             " + ap.ifconfig()[3])
 
 ##########################################################################
 ### Setup wifi credentials
 
-def setupWifi(data):
-    ssid = data["wifi_ssid"]
-    password = data["wifi_password"]
+def setupWifi(data, ssid, password):
     
     wifi = network.WLAN(network.STA_IF)
     wifi.active(True)
@@ -167,19 +170,79 @@ def setupWifi(data):
         print('connected')
         status = wifi.ifconfig()
         print( 'ip = ' + status[0] )
+        return status
+
+##########################################################################
+### connect to wifi
     
+def connectWifi(ssid, password):
+    #Connect to WLAN
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(ssid, password)
+    while wlan.isconnected() == False:
+        print('Waiting for connection...')
+        sleep(1)
+    ip = wlan.ifconfig()[0]
+    print(f'Connected on {ip}')
+    return ip
+
+
+##########################################################################
+### Start web server
+    
+def startWebServer(html):
+#    try:
+#        ip = connectWifi(ssid, password)
+#    except KeyboardInterrupt:
+#        machine.reset()
+
     addr = socket.getaddrinfo('0.0.0.0', 80)[0][-1]
-    
+
     s = socket.socket()
     s.bind(addr)
     s.listen(1)
-    
-    print('listening on', addr)
+
+    print('listening on    ', addr[0])
+
+    # Listen for connections
+    while True:
+        try:
+            cl, addr = s.accept()
+            print('client connected from', addr)
+            request = cl.recv(1024)
+            print(request)
+
+            request = str(request)
+            led_on = request.find('/light/on')
+            led_off = request.find('/light/off')
+            print( 'led on = ' + str(led_on))
+            print( 'led off = ' + str(led_off))
+
+            if led_on == 6:
+                print("led on")
+                led.value(1)
+                stateis = "LED is ON"
+
+            if led_off == 6:
+                print("led off")
+                led.value(0)
+                stateis = "LED is OFF"
+
+            response = html % stateis
+
+            cl.send('HTTP/1.0 200 OK\r\nContent-type: text/html\r\n\r\n')
+            cl.send(response)
+            cl.close()
+
+        except OSError as e:
+            cl.close()
+            print('connection closed')
 
 ##########################################################################
 ### html template for web page
 
-wiFiHtml = """<!DOCTYPE html>
+mainHtml = """<!DOCTYPE html>
 <html>
     <head> <title>Pico W</title> </head>
     <body> <h1>Pico W</h1>
@@ -191,7 +254,7 @@ wiFiHtml = """<!DOCTYPE html>
 ##########################################################################
 ### html template for access point page
 
-wiFiHtml = """<!DOCTYPE html>
+apHtml = """<!DOCTYPE html>
 <html>
     <head> <title>Pico W</title> </head>
     <body> <h1>Pico W</h1>
@@ -200,7 +263,6 @@ wiFiHtml = """<!DOCTYPE html>
 </html>
 """
 
-
 ##########################################################################
 ### run initial config file creation and read config file
 
@@ -208,17 +270,12 @@ wiFiHtml = """<!DOCTYPE html>
 initialSetup()
 config = readConfigFile()
 
-##########################################################################
-### pass config file to ssid/password function to parse variables
-
 ssid = getSsid(config)
 password = getPassword(config)
-
-##########################################################################
-### if keys aren't setup access point if not start wifi
-
+ip = ""
 
 if not "wifi_ssid" in config or not "wifi_password" in config or len(config["wifi_ssid"]) == 0 or len(config["wifi_password"]) == 0:
-    setupAccessPoint(config)
+    setupAccessPoint(ssid, password)
+    startWebServer(apHtml)
 else:
-    setupWifi(config)
+    startWebServer(apHtml, ssid, password)
